@@ -1,19 +1,23 @@
 import React, { useState } from 'react';
-import { RefreshCw, Search } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 
 export default function AttendanceLogsPanel({
+  currentUser,
   attendanceLogs,
   loadingLogs,
   onRefreshLogs
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const isFaculty = currentUser?.role === 'professor';
+  const isCoordinator = isFaculty && currentUser?.is_admin === 'yes';
 
   const filteredLogs = attendanceLogs.filter((r) => {
     const sName = (r.student_name || '').toLowerCase();
     const cName = (r.course_name || '').toLowerCase();
+    const eNo = (r.enrollment_no || '').toLowerCase();
     const q = searchQuery.toLowerCase().trim();
-    const matchText = !q || sName.includes(q) || cName.includes(q);
+    const matchText = !q || sName.includes(q) || cName.includes(q) || eNo.includes(q);
     const matchStatus = !statusFilter || r.status === statusFilter;
     return matchText && matchStatus;
   });
@@ -23,9 +27,19 @@ export default function AttendanceLogsPanel({
       {/* Banner */}
       <div className="page-hero-banner" style={{ background: 'linear-gradient(135deg, var(--teal) 0%, #004D40 100%)' }}>
         <div>
-          <div className="page-hero-title">Attendance Records &amp; Logs</div>
+          <div className="page-hero-title">
+            {isCoordinator
+              ? 'All Department Attendance Logs (Coordinator / HOD)'
+              : isFaculty
+                ? 'My Subject Attendance Records'
+                : 'My Attendance History'}
+          </div>
           <div className="page-hero-sub">
-            Complete audit record of attendance marked via face verification and geofence radar
+            {isCoordinator
+              ? 'Complete audit record across all subjects and labs'
+              : isFaculty
+                ? `Showing attendance logs strictly for classes assigned to ${currentUser?.name || 'you'}`
+                : `Personal attendance records for ${currentUser?.name || 'your account'}`}
           </div>
         </div>
         <button
@@ -45,7 +59,7 @@ export default function AttendanceLogsPanel({
             <input
               className="field-input"
               type="search"
-              placeholder="Search by student name or course..."
+              placeholder={isFaculty ? 'Search by student, roll no, or course...' : 'Search by course...'}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
@@ -70,7 +84,7 @@ export default function AttendanceLogsPanel({
                 <th>Log ID</th>
                 <th>Student</th>
                 <th>Course / Lab</th>
-                <th>Timestamp</th>
+                <th>Timestamp (IST)</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -94,7 +108,7 @@ export default function AttendanceLogsPanel({
                     <td>
                       <strong>{r.student_name}</strong>{' '}
                       <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                        (ID: {r.student_id})
+                        ({r.enrollment_no || `ID: ${r.student_id}`})
                       </span>
                     </td>
                     <td>{r.course_name}</td>
