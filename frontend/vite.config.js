@@ -10,11 +10,14 @@ export default defineConfig({
     proxy: {
       '/api': 'http://127.0.0.1:8000',
       '/auth': 'http://127.0.0.1:8000',
+      '/login': 'http://127.0.0.1:8000',
       '/register': 'http://127.0.0.1:8000',
       '/schedules': 'http://127.0.0.1:8000',
       '/sessions': 'http://127.0.0.1:8000',
       '/attendance': 'http://127.0.0.1:8000',
       '/users': 'http://127.0.0.1:8000',
+      '/students': 'http://127.0.0.1:8000',
+      '/faculty': 'http://127.0.0.1:8000',
     }
   }
 })

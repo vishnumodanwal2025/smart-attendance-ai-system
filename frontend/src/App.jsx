@@ -13,21 +13,15 @@ import AttendanceLogsPanel from './components/AttendanceLogsPanel';
 import Toast from './components/Toast';
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(() => {
+  const [authToken, setAuthToken] = useState(() => {
     try {
-      const saved = localStorage.getItem('glbajaj_user');
-      if (saved) {
-        const user = JSON.parse(saved);
-        // Restore body class on page reload
-        document.body.classList.remove('role-student', 'role-professor');
-        document.body.classList.add('role-' + user.role);
-        return user;
-      }
-      return null;
+      return localStorage.getItem('glbajaj_token') || null;
     } catch {
       return null;
     }
   });
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getItem('glbajaj_token')));
 
   const [activeTab, setActiveTab] = useState('checkin');
   const [backendOnline, setBackendOnline] = useState(false);
@@ -35,6 +29,7 @@ export default function App() {
 
   const [availableSchedules, setAvailableSchedules] = useState(STATIC_SCHEDULE_DATA);
   const [enrolledStudents, setEnrolledStudents] = useState([]);
+  const [facultyList, setFacultyList] = useState([]);
   const [activeSessions, setActiveSessions] = useState([]);
   const [attendanceLogs, setAttendanceLogs] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
@@ -48,14 +43,75 @@ export default function App() {
     }, 3800);
   }, []);
 
+  const clearSession = useCallback(() => {
+    setAuthToken(null);
+    setCurrentUser(null);
+    setEnrolledStudents([]);
+    setFacultyList([]);
+    setActiveSessions([]);
+    setAttendanceLogs([]);
+    document.body.classList.remove('role-student', 'role-professor');
+    try {
+      localStorage.removeItem('glbajaj_token');
+      localStorage.removeItem('glbajaj_user');
+    } catch {}
+  }, []);
+
+  const authFetch = useCallback(
+    async (path, options = {}) => {
+      const headers = new Headers(options.headers || {});
+      if (authToken) {
+        headers.set('Authorization', `Bearer ${authToken}`);
+      }
+      const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+      if (res.status === 401 && authToken) {
+        clearSession();
+        showToast('warning', 'Session expired. Please sign in again.');
+      }
+      return res;
+    },
+    [authToken, clearSession, showToast]
+  );
+
+  // Validate stored JWT token on mount
+  useEffect(() => {
+    let cancelled = false;
+    const verifyToken = async () => {
+      if (!authToken) {
+        setAuthChecking(false);
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/auth/me`, {
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+        if (!cancelled && res.ok) {
+          const user = await res.json();
+          setCurrentUser(user);
+          document.body.classList.remove('role-student', 'role-professor');
+          document.body.classList.add('role-' + user.role);
+        } else if (!cancelled) {
+          clearSession();
+        }
+      } catch {
+        // Keep token if backend temporarily unreachable; don't trust unverified localStorage role
+      } finally {
+        if (!cancelled) setAuthChecking(false);
+      }
+    };
+    verifyToken();
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken, clearSession]);
+
   // Check backend health
   const checkHealth = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/health`, {
         signal: AbortSignal.timeout(4000)
       });
-      if (res.ok) setBackendOnline(true);
-      else setBackendOnline(false);
+      setBackendOnline(res.ok);
     } catch {
       setBackendOnline(false);
     }
@@ -67,43 +123,49 @@ export default function App() {
     return () => clearInterval(timer);
   }, [checkHealth]);
 
-  // Load schedules
+  // Load schedules (authoritative backend data merged with UI color/icon)
   const loadSchedules = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/schedules`);
       if (res.ok) {
         const backendData = await res.json();
-        const merged = STATIC_SCHEDULE_DATA.map((st) => {
-          const match = backendData.find((b) => b.id === st.id);
-          return match ? { ...st, ...match } : st;
+        const merged = backendData.map((b) => {
+          const uiMeta = STATIC_SCHEDULE_DATA.find((st) => st.id === b.id);
+          return uiMeta ? { ...uiMeta, ...b } : b;
         });
-        setAvailableSchedules(merged);
+        if (merged.length > 0) setAvailableSchedules(merged);
       }
     } catch {
       setAvailableSchedules(STATIC_SCHEDULE_DATA);
     }
   }, []);
 
-  // Load users
+  // Load students & faculty (Professor only)
   const loadUsers = useCallback(async () => {
+    if (!currentUser || currentUser.role !== 'professor') return;
     try {
-      const res = await fetch(`${API_BASE}/users`);
-      if (res.ok) {
-        const users = await res.json();
-        const students = users.filter((u) => u.role === 'student');
-        setEnrolledStudents(students);
+      const [resUsers, resFaculty] = await Promise.all([
+        authFetch('/users'),
+        authFetch('/faculty')
+      ]);
+      if (resUsers.ok) {
+        const users = await resUsers.json();
+        setEnrolledStudents(users.filter((u) => u.role === 'student'));
+      }
+      if (resFaculty.ok) {
+        const fac = await resFaculty.json();
+        setFacultyList(Array.isArray(fac) ? fac : []);
       }
     } catch {
-      setEnrolledStudents([
-        { id: 1, name: 'Student Demo (25CSAIM076)', enrollment_no: '25CSAIM076', role: 'student', has_face_encoding: true }
-      ]);
+      setEnrolledStudents([]);
     }
-  }, []);
+  }, [currentUser, authFetch]);
 
-  // Load active sessions
+  // Load active sessions (Authenticated)
   const loadActiveSessions = useCallback(async () => {
+    if (!authToken) return;
     try {
-      const res = await fetch(`${API_BASE}/sessions/active`);
+      const res = await authFetch('/sessions/active');
       if (res.ok) {
         const data = await res.json();
         setActiveSessions(Array.isArray(data) ? data : []);
@@ -111,13 +173,14 @@ export default function App() {
     } catch {
       setActiveSessions([]);
     }
-  }, []);
+  }, [authToken, authFetch]);
 
-  // Load attendance logs
+  // Load attendance logs (Authenticated, scoped by role on backend)
   const loadAttendanceLogs = useCallback(async () => {
+    if (!authToken) return;
     setLoadingLogs(true);
     try {
-      const res = await fetch(`${API_BASE}/attendance`);
+      const res = await authFetch('/attendance');
       if (res.ok) {
         const logs = await res.json();
         setAttendanceLogs(Array.isArray(logs) ? logs : []);
@@ -127,47 +190,48 @@ export default function App() {
     } finally {
       setLoadingLogs(false);
     }
-  }, []);
+  }, [authToken, authFetch]);
 
-  // Initialize and poll data once user is logged in
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser && authToken) {
       loadSchedules();
       loadUsers();
       loadActiveSessions();
       loadAttendanceLogs();
 
-      // Poll active sessions periodically for students
       let sessionPollTimer = null;
       if (currentUser.role === 'student') {
         sessionPollTimer = setInterval(loadActiveSessions, 10000);
       }
-
       return () => {
         if (sessionPollTimer) clearInterval(sessionPollTimer);
       };
     }
-  }, [currentUser, loadSchedules, loadUsers, loadActiveSessions, loadAttendanceLogs]);
+  }, [currentUser, authToken, loadSchedules, loadUsers, loadActiveSessions, loadAttendanceLogs]);
 
-  const handleLoginSuccess = (user) => {
+  const handleLoginSuccess = (user, token) => {
+    setAuthToken(token);
     setCurrentUser(user);
-    // Set body role class so CSS faculty-only display rules work (matches original HTML)
     document.body.classList.remove('role-student', 'role-professor');
     document.body.classList.add('role-' + user.role);
     try {
-      localStorage.setItem('glbajaj_user', JSON.stringify(user));
+      localStorage.setItem('glbajaj_token', token);
     } catch {}
     setActiveTab('checkin');
   };
 
   const handleLogout = () => {
-    setCurrentUser(null);
-    document.body.classList.remove('role-student', 'role-professor');
-    try {
-      localStorage.removeItem('glbajaj_user');
-    } catch {}
+    clearSession();
     showToast('info', 'Logged out.');
   };
+
+  if (authChecking) {
+    return (
+      <div id="loginOverlay" style={{ color: '#fff', fontSize: 15, fontWeight: 700 }}>
+        Verifying session...
+      </div>
+    );
+  }
 
   return (
     <>
@@ -187,9 +251,10 @@ export default function App() {
 
           <TabNav
             activeTab={activeTab}
+            currentUser={currentUser}
             setActiveTab={(tab) => {
-              // Guard: students cannot access faculty-only tabs
-              if ((tab === 'sessions' || tab === 'enroll') && currentUser.role !== 'professor') return;
+              if (tab === 'sessions' && currentUser.role !== 'professor') return;
+              if (tab === 'enroll' && !(currentUser.role === 'professor' && currentUser.is_admin === 'yes')) return;
               setActiveTab(tab);
             }}
           />
@@ -198,6 +263,7 @@ export default function App() {
             {activeTab === 'checkin' && (
               <LiveCheckinPanel
                 currentUser={currentUser}
+                authFetch={authFetch}
                 activeSessions={activeSessions}
                 availableSchedules={availableSchedules}
                 enrolledStudents={enrolledStudents}
@@ -211,15 +277,22 @@ export default function App() {
             {activeTab === 'sessions' && currentUser.role === 'professor' && (
               <ManageSessionsPanel
                 currentUser={currentUser}
+                authFetch={authFetch}
                 availableSchedules={availableSchedules}
+                facultyList={facultyList}
                 showToast={showToast}
                 onSessionUpdated={loadActiveSessions}
+                onSchedulesUpdated={loadSchedules}
               />
             )}
 
-            {activeTab === 'enroll' && currentUser.role === 'professor' && (
+            {activeTab === 'enroll' && currentUser.role === 'professor' && currentUser.is_admin === 'yes' && (
               <FaceEnrollmentPanel
+                currentUser={currentUser}
+                authToken={authToken}
+                authFetch={authFetch}
                 enrolledStudents={enrolledStudents}
+                facultyList={facultyList}
                 onStudentEnrolled={loadUsers}
                 showToast={showToast}
               />
@@ -231,6 +304,7 @@ export default function App() {
 
             {activeTab === 'history' && (
               <AttendanceLogsPanel
+                currentUser={currentUser}
                 attendanceLogs={attendanceLogs}
                 loadingLogs={loadingLogs}
                 onRefreshLogs={loadAttendanceLogs}

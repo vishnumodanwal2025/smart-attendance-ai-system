@@ -7,7 +7,12 @@ export default function Topbar({
   currentUser,
   onLogout
 }) {
-  const roleName = currentUser?.role === 'professor' ? 'Faculty: ' : 'Student: ';
+  const roleName =
+    currentUser?.role === 'professor'
+      ? currentUser?.is_admin === 'yes'
+        ? 'Coordinator / HOD: '
+        : 'Faculty: '
+      : 'Student: ';
   const secTag = currentUser?.section ? ` Sec-${currentUser.section}` : '';
   const groupTag = currentUser?.group ? ` (${currentUser.group})` : '';
 
